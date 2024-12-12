@@ -1,0 +1,9 @@
+cohere==5.13.3
+hnswlib==0.8.0
+matplotlib==3.9.3
+pandas==2.2.3
+pdfminer.six==20231228
+python-dotenv==1.0.1
+Requests==2.32.3
+toml==0.10.2
+unstructured==0.16.9
