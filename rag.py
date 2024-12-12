@@ -269,6 +269,7 @@ def evaluate_one(rule_dir):
     result["abstract"] = details["abstract"]
     result["citation"] = details["citation"]
     result["publication-date"] = details["publication-date"]
+    result["cfr-references"] = details["cfr-references"]
     result["preamble"] = preamble
     result["prompt"] = prompt
     result["rule_dir"] = rule_dir
@@ -277,7 +278,7 @@ def evaluate_one(rule_dir):
 
 
 def evaluate_batch(rules_dir):
-    results = {"answer": [], "citations": [], "documents": [], "title": [], "agencies": [], "agency-shorthand": [], "abstract": [], "citation": [], "publication-date": [], "preamble": [], "prompt": [], "rule_length": [], "rule_dir": []}
+    results = {"answer": [], "citations": [], "documents": [], "title": [], "agencies": [], "agency-shorthand": [], "abstract": [], "citation": [], "publication-date": [], "cfr-references": [], "preamble": [], "prompt": [], "rule_length": [], "rule_dir": []}
 
     skipped = []
     num_to_eval = sum([1 for _ in os.scandir(rules_dir)])
@@ -295,6 +296,7 @@ def evaluate_batch(rules_dir):
                 results["abstract"].append(result["abstract"])
                 results["citation"].append(result["citation"])
                 results["publication-date"].append(result["publication-date"])
+                results["cfr-references"].append(result["cfr-references"])
                 results["preamble"].append(result["preamble"])
                 results["prompt"].append(result["prompt"])
                 results["rule_length"].append(result["rule_length"])
@@ -331,10 +333,15 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
+    if args.output is not None:
+        outf = open(args.output, "w")
+    else:
+        outf = open("out.csv", "w")
+
     if args.using_cohere_trial_key:
         USING_COHERE_TRIAL_KEY = True
 
-    final_results = {"rule_dir": [], "answer": [], "citations": [], "documents": [], "title": [], "agencies": [], "agency-shorthand": [], "abstract": [], "citation": [], "publication-date": [], "preamble": [], "prompt": [], "rule_length": []}
+    final_results = {"rule_dir": [], "answer": [], "citations": [], "documents": [], "title": [], "agencies": [], "agency-shorthand": [], "abstract": [], "citation": [], "publication-date": [], "cfr-references": [], "preamble": [], "prompt": [], "rule_length": []}
 
     for input in args.inputs:
         if is_valid_workspace(input):
@@ -349,6 +356,7 @@ if __name__ == "__main__":
             final_results["abstract"].append(one_result["abstract"])
             final_results["citation"].append(one_result["citation"])
             final_results["publication-date"].append(one_result["publication-date"])
+            final_results["cfr-references"].append(one_result["cfr-references"])
             final_results["preamble"].append(one_result["preamble"])
             final_results["prompt"].append(one_result["prompt"])
             final_results["rule_length"].append(one_result["rule_length"])
@@ -365,15 +373,11 @@ if __name__ == "__main__":
             final_results["abstract"].extend(batch_results["abstract"])
             final_results["citation"].extend(batch_results["citation"])
             final_results["publication-date"].extend(batch_results["publication-date"])
+            final_results["cfr-references"].extend(batch_results["cfr-references"])
             final_results["preamble"].extend(batch_results["preamble"])
             final_results["prompt"].extend(batch_results["prompt"])
             final_results["rule_length"].extend(batch_results["rule_length"])
             final_results["rule_dir"].extend(batch_results["rule_dir"])
-
-    if args.output is not None:
-        outf = open(args.output, "w")
-    else:
-        outf = open("out.csv", "w")
 
     final_results = pd.DataFrame(final_results)
     final_results.to_csv(outf)

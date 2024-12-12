@@ -23,11 +23,13 @@ def get_rules(in_f, out_dir):
             pdf_res.raise_for_status()
             assert pdf_res.headers["Content-Type"].startswith("application/pdf")
             
-            # Get the HTML of the rule
-            html_res = requests.get(f"https://www.federalregister.gov/api/v1/documents/{doc_num}.json?fields[]=body_html_url")
-            html_res.raise_for_status()
-            assert html_res.headers["Content-Type"].startswith("application/json")
-            html_res = requests.get(html_res.json()["body_html_url"])
+            # Get the HTML and CFR Part of the rule
+            html_and_cfr_res = requests.get(f"https://www.federalregister.gov/api/v1/documents/{doc_num}.json?fields[]=body_html_url&fields[]=cfr_references")
+            html_and_cfr_res.raise_for_status()
+            assert html_and_cfr_res.headers["Content-Type"].startswith("application/json")
+            html_and_cfr_res = html_and_cfr_res.json()
+            cfr_references = html_and_cfr_res["cfr_references"]
+            html_res = requests.get(html_and_cfr_res["body_html_url"])
             html_res.raise_for_status()
             assert html_res.headers["Content-Type"].startswith("text/html")
 
@@ -47,6 +49,7 @@ def get_rules(in_f, out_dir):
             details['agency-shorthand'] = agency_abbrvs
             details['abstract'] = row['abstract']
             details['citation'] = row['citation']
+            details['cfr-references'] = cfr_references
             date = row['publication_date'].split("/")
             details['publication-date'] = datetime.date(int(date[2]), int(date[0]), int(date[1]))
         except Exception as e:

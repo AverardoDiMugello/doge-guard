@@ -6,6 +6,8 @@ Federal regulations are published in the [Federal Register](https://www.federalr
 
 Doge Guard is a simple [RAG](https://en.wikipedia.org/wiki/Retrieval-augmented_generation) application that uses an LLM to analyze a Final Rule document, detect if any commenter disputed the agency's statutory authority to make the rule, then output yes or no, and if the answer is yes, include citations to the specific comments.
 
+The name "Doge Guard" was a suggestion from Grok.
+
 ## Results
 
 TODO: Link to releases for 2023 and 2024
@@ -22,7 +24,7 @@ source env/bin/activate
 pip install -r requirements.txt
 ```
 
-Next, create a Cohere API key and a .env file.
+Next, go to [Cohere's website](https://cohere.com/) and create an account and API key. Create a file called `.env` and save the API key to that file like this:
 
 ```
 COHERE_API_KEY=YourAPIKeyHere
@@ -30,32 +32,49 @@ COHERE_API_KEY=YourAPIKeyHere
 
 ### Get Data
 
-First create a folder in this repository called "documents". This folder will store all of the data used by Doge Guard.
+First create a folder in this repository called `documents`. This folder will store all of the data used by Doge Guard.
 
 #### Search For Regulations
 
-Make a folder in documents called "search_results". Federal regulations can be found at the [Federal Register website](https://www.federalregister.gov/documents/search) using their search function. In filters, under Document Category, check Rule, so that you only get Final Rule documents. Enter any other filters for the regulations you want to examine, then click search, then click "CSV/Excel" to download a spreadsheet of search resuts. Save them in the folder you just created. Don't download individual rules; the next step will do that for us.
+Make a folder in documents called `search_results`. Federal regulations can be found at the [Federal Register website](https://www.federalregister.gov/documents/search) using their search function. In filters, under Document Category, check Rule, so that you only get Final Rule documents. Enter any other filters for the regulations you want to examine, then click Search, then click "CSV/Excel" to download a spreadsheet of search resuts. Save them in the folder you just created. Don't download individual rules; the next step will do that for us.
 
 The website caps search results at 1000 entries per download, so you may need to break up the results you want using the filters. For example, if you want a year's worth of regulations from all agencies, which is typically about 3,000 final rules, you could download four search results, one for each quarter of the year.
 
 #### Get The Rules
 
-Run get_rules.py with one or more search result files from the Federal Register and an output directory inside documents. This will set up the workspace in the proper format for processing.
+Run get_rules.py with one or more search result files from the Federal Register and an output directory inside documents. This will set up the workspace in the proper format for processing. This step is only querying public USG API's, so it won't cost you anything. For the 1,601 Final Rules published in Q3 and Q4 of 2022, this took ~40 minutes to run.
 
 ```
 python get_rules.py documents/search_results/rules_2022_Q3.csv documents/search_results/rules_2022_Q4.csv -o documents/rules_2022
 ```
 
+At the end of this running, you may get output that indicates some rules were skipped due to internal server errors with the Federal Register API. In this event, either build a search results csv file with just those rules that were skipped or construct the workspace by hand. The number of skipped should be few if not zero.
+
+### Get Results
+
 #### Run The RAG
 
-Make a folder to store your results. Then,
+Make a folder in `documents` called `results` to store the application's outputs. Then, you can either specify individual rule workspaces or a directory of rule workspaces. This program _will_ call the Cohere API, and you _will_ be charged if you are using a production API key. If you are using a trial API key specify the --using-cohere-trial-key option in the below commands to adjust the rate limits accordingly. Processing the 1,601 Final Rules for 2022 Q3 and Q4 cost $9.10 and took 2.5 hours.
 
 ```
-python rag.py documents/rules_2022 -o results/rules_2022_all_results.csv
+# Run one rule, default output filename (out.csv)
+python rag.py documents/rules_2022/2022-12376
+
+# Run two rules, default output filename
+python rag.py documents/rules_2022/2022-12376 documents/rules_2022/2022-28471
+
+# Run a directory of rules, like the one made by get_rules.py, output results to rules_2022_q3_q4_all_results.csv
+python rag.py documents/rules_2022 -o documents/results/rules_2022_q3_q4_all_results.csv
 ```
 
 #### Analyze The Results
 
 ```
-python visualize.py results/rules_2022_all_results.csv
+python visualize.py documents/results/rules_2022_q3_q4_all_results.csv
+```
+
+#### Extract Only The "Yes" Results
+
+```
+python yes_results.py documents/results/rules_2022_q3_q4_all_results.csv -o documents/results/rules_2022_q3_q4_yes_results.csv
 ```
