@@ -12,7 +12,7 @@ The name "Doge Guard" was a suggestion from Grok.
 
 Doge Guard results include the LLM's Yes/No decision, all documents it used to make this decision, the prompt and preamble used, and a large amount of information about the document, including its document number, issuing agencies, abstract, and affected CFR parts.
 
-Some results have been published as Releases here on GitHub. Click the Releases link to download them. The results currently released cover every Final Rule entered into the Federal Register since the _West Virginia v. EPA_ decision: June 30th, 2022 through December 31st, 2024.
+Some results have been published as Releases here on GitHub. Click the Releases link in the options to the right of this document to download them. The results [currently released](https://github.com/AverardoDiMugello/doge-guard/releases/tag/v0.1-pre-release) cover every Final Rule entered into the Federal Register since the _West Virginia v. EPA_ decision: June 30th, 2022 through December 31st, 2024.
 
 Results may be periodically releaed as Doge Guard changes. Breaking changes to the result data schema will be reflected in version number increments to Doge Guard.
 
@@ -30,7 +30,9 @@ source env/bin/activate
 pip install -r requirements.txt
 ```
 
-Next, go to [Cohere's website](https://cohere.com/) and create an account and API key. Create a file called `.env` and save the API key to that file like this:
+Next, we need to setup access to the LLM. Doge Guard uses Cohere for its LLM, embeddings, and re-rankers. To access these, go to [Cohere's website](https://cohere.com/) and create an account and API key. For testing that your Doge Guard setup works, you can use a trial API key initially, which allows free access at tight rate-limits for 10,000 API calls per month, but in order to run serious workloads you will need a production key. The entire development of Doge Guard cost <$2 with a production key, so I recommend just getting a production one.
+
+Once you have an account and API key, create a file called `.env` in the root directory of the `doge-guard` project (i.e., the same folder as this README.md file) and save the API key to that file like this:
 
 ```
 COHERE_API_KEY=YourAPIKeyHere
@@ -45,6 +47,8 @@ First create a folder in this repository called `documents`. This folder will st
 Make a folder in documents called `search_results`. Federal regulations can be found at the [Federal Register website](https://www.federalregister.gov/documents/search) using their search function. In filters, under Document Category, check Rule, so that you only get Final Rule documents. Enter any other filters for the regulations you want to examine, then click Search, then click "CSV/Excel" to download a spreadsheet of search resuts. Save them in the folder you just created. Don't download individual rules; the next step will do that for us.
 
 The website caps search results at 1000 entries per download, so you may need to break up the results you want using the filters. For example, if you want a year's worth of regulations from all agencies, which is typically about 3,000 final rules, you could download four search results, one for each quarter of the year.
+
+The rest of this guide uses the example of analyzing every Final Rule from every federal agency in Q3 and Q4 of 2022, which is 1,601 documents. To get these regulations from the Federal Register search engine, check Rule in Document Category, check Range in Publication Date and enter 7/01/2022 in On Or After and 9/30/2022 in On Or Before, then click Search, then click CSV/Excel, and save as `documents/search_results/rules_2022_Q3.csv`. Then repeat these steps with 10/01/2022 and 12/31/2022 in the Publication Date Range and save as `documents/search_results/rules_2022_Q4.csv`.
 
 #### Get The Rules
 
@@ -66,8 +70,8 @@ Make a folder in `documents` called `results` to store the application's outputs
 # Run one rule, default output filename (out.csv)
 python rag.py documents/rules_2022/2022-12376
 
-# Run two rules, default output filename
-python rag.py documents/rules_2022/2022-12376 documents/rules_2022/2022-28471
+# Run two rules, default output filename, with a trial API key (not recommended)
+python rag.py documents/rules_2022/2022-12376 documents/rules_2022/2022-28471 --using-cohere-trial-key
 
 # Run a directory of rules, like the one made by get_rules.py, output results to rules_2022_q3_q4_all_results.csv
 python rag.py documents/rules_2022 -o documents/results/rules_2022_q3_q4_all_results.csv
