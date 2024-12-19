@@ -12,7 +12,7 @@ The name "Doge Guard" was a suggestion from Grok.
 
 Doge Guard results include the LLM's Yes/No decision, all documents it used to make this decision, the prompt and preamble used, and a large amount of information about the document, including its document number, issuing agencies, abstract, and affected CFR parts.
 
-Some results have been published as Releases here on GitHub. Click the Releases link in the options to the right of this document to download them. The results [currently released](https://github.com/AverardoDiMugello/doge-guard/releases/tag/v0.1-pre-release) cover every Final Rule entered into the Federal Register since the _West Virginia v. EPA_ decision: June 30th, 2022 through December 31st, 2024.
+Some results have been published as Releases here on GitHub. Click the Releases link in the options to the right of this document to download them. The results [currently released](https://github.com/AverardoDiMugello/doge-guard/releases/tag/v0.1-pre-release) cover every Final Rule entered into the Federal Register since the _West Virginia v. EPA_ decision: June 30th, 2022 through December 31st, 2024. A thread discussing these results is [posted on X](https://x.com/DiMugello/status/1868022889368400007).
 
 Results may be periodically releaed as Doge Guard changes. Breaking changes to the result data schema will be reflected in version number increments to Doge Guard.
 
