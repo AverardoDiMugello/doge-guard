@@ -31,12 +31,12 @@ def citation_in_doc(cita_in_cfr, rule):
     return same_edition and in_page_range
 
 
-def parts_of_title(num):
+def parts_of_title(num, datadir):
     '''
     Fetch the structure of a CFR Title from the eCFR, cache it, and return a list of the component Parts.
     All CFR Titles are divided into Parts, unlike some other subdivisions (Chapter, Subchapter, etc.).
     '''
-    structure_path = os.path.join("documents", "cfr", f"title-{num}", "structure.json")
+    structure_path = os.path.join(datadir, "cfr", f"title-{num}", "structure.json")
     try:
         with open(structure_path, "r") as f:
             structure = json.load(f)
@@ -56,14 +56,14 @@ def parts_of_title(num):
     return list(filter(lambda item : item["type"] == "part", flatten_structure(structure)))
 
 
-def citations_of_part(titleno, partno):
+def citations_of_part(titleno, partno, datadir):
     '''
     Fetch the full text of a CFR Part from the eCFR (XML format), cache it, then extract via regex any
     citations of the Federal Register along with whatever division of the CFR to which the citation belongs.
-    Returns two dictionaries: (CFR Division : [FR citation], FR citation : [CFR Division])
-    In which FR citation is a string of the form \"X FR Y, Month, Date, Year\" and CFR division is a tuple of the form ("NAME", "DIV-TYPE")
+    Returns a dictionary {FR citation : [CFR Division]}, in which FR citation is a page citation string of  
+    the form "X FR Y, Month, Date, Year" and CFR division is a tuple of the form ("NAME", "DIV-TYPE")
     '''
-    part_path = os.path.join("documents", "cfr", f"title-{titleno}", f"part-{partno}", "part.xml")
+    part_path = os.path.join(datadir, "cfr", f"title-{titleno}", f"part-{partno}", "part.xml")
     try:
         with open(part_path, "r") as f:
             full_xml = ET.parse(f)
@@ -75,7 +75,6 @@ def citations_of_part(titleno, partno):
             f.write(full_xml)
         full_xml = ET.fromstring(full_xml)
 
-    cfr_div_to_fr_citas = {}
     fr_cita_to_cfr_divs = {}
 
     for cita_elem in full_xml.iter("CITA"):
@@ -89,11 +88,7 @@ def citations_of_part(titleno, partno):
             if fr_cita not in fr_cita_to_cfr_divs:
                 fr_cita_to_cfr_divs[fr_cita] = set()
             fr_cita_to_cfr_divs[fr_cita].add((divname, divty))
-
-        if (divname, divty) not in cfr_div_to_fr_citas:
-            cfr_div_to_fr_citas[(divname, divty)] = set()
-        cfr_div_to_fr_citas[(divname, divty)].update(fr_citations)
-            
+        
     # This should just be accounted for in the sub-part granule citations
     # TODO: when we get CFR data that's better for time differentials, we can update this and test this hypothesis.
     # sources = full_xml.find("SOURCE")
@@ -101,14 +96,15 @@ def citations_of_part(titleno, partno):
     #     assert sources.find("HED").text == "Source:" and "Unexpected structure for the Source tag"
     #     citations.extend(re.findall(citation_regex, sources.find("PSPACE").text))
 
-    return cfr_div_to_fr_citas, fr_cita_to_cfr_divs
+    return fr_cita_to_cfr_divs
 
 
-def final_rules_for_part(titleno, partno):
+def final_rules_for_part(titleno, partno, datadir):
     '''
-    Search FederalRegister.gov for all Final Rule documents since 2000 that were marked as affecting the given CFR Part
+    Search FederalRegister.gov for all Final Rule documents since 2000 that were marked as affecting the given CFR Part.
+    Cache the search results. FR.gov's search API returns a JSON object, returned from this function as a dictionary.
     '''
-    rule_search_path = os.path.join("documents", "cfr", f"title-{titleno}", f"part-{partno}", "rules.json")
+    rule_search_path = os.path.join(datadir, "cfr", f"title-{titleno}", f"part-{partno}", "rules.json")
     try:
         with open(rule_search_path, "r") as f:
             rule_search = json.load(f)
@@ -154,7 +150,7 @@ def final_rules_for_part(titleno, partno):
     return rule_search
 
 
-def build_data_for_final_rules(final_rule_docs):
+def fetch_final_rules(final_rule_docs, datadir):
     '''
     Create the following portion of the database:
     final-rules/
@@ -174,10 +170,10 @@ def build_data_for_final_rules(final_rule_docs):
     num_rules = len(final_rule_docs)
     for i, docno in enumerate(final_rule_docs):
         print(f"{i+1}/{num_rules}: {docno}")
-        rule_doc = final_rule_docs[docno]
+        rule_doc = final_rule_docs[docno][1]
 
         # Skip existing Final Rule docs
-        document_dir = os.path.join("documents", "final_rules", docno)
+        document_dir = os.path.join(datadir, "final_rules", docno)
         if os.path.exists(document_dir):
             assert os.path.isdir(document_dir) and f"{document_dir} exists but isn't a directory."
             continue
@@ -235,7 +231,7 @@ def build_data_for_final_rules(final_rule_docs):
     return skipped
 
 
-def cfr_to_fr_docs(titlenos):
+def cfr_to_fr_docs(titlenos, datadir):
     '''
     Create a database in the local filesystem with this structure:
     cfr-{date}/
@@ -259,26 +255,32 @@ def cfr_to_fr_docs(titlenos):
         ...
     Return the FR doc data
     '''
-    final_results = {
-        "FR Final Rule Docno": [],
-        "CFR Divs Affected": [],
-    }
+    # fr_doc_data = {
+    #     "fr-docno": [],
+    #     "cfr-divs": [],
+    #     "fr-citation": [], 
+    #     "fr-doc-title": [],
+    #     "fr-doc-agencies": [], 
+    #     "fr-doc-agency-shorthand": [],
+    #     "fr-doc-abstract": [],
+    #     "fr-doc-publication-date": [], 
+    #     "fr-doc-cfr-references": [], 
+    #     "fr-doc-word-count": []
+    # }
     final_rule_docs = {}
     # FR citations from the CFR that can't be mapped back to a Final Rule from FederalRegister.gov
     unaccounted_for_fr_citas = set()
 
+    # TODO: update this when input language is improved
     for titleno in titlenos:
-        os.makedirs(os.path.join("documents", "cfr", f"title-{titleno}"), exist_ok=True)
-        parts = parts_of_title(titleno)
+        os.makedirs(os.path.join(datadir, "cfr", f"title-{titleno}"), exist_ok=True)
+        parts = parts_of_title(titleno, datadir)
         for part in parts:
             if not part["reserved"]:
                 partno = part["identifier"] # Can be non-integer
-                if not partno == "62":
-                    continue
-
-                os.makedirs(os.path.join("documents", "cfr", f"title-{titleno}", f"part-{partno}"), exist_ok=True)
-                cfr_div_to_fr_citas, fr_cita_to_cfr_divs = citations_of_part(titleno, partno)
-                final_rules = final_rules_for_part(titleno, partno)
+                os.makedirs(os.path.join(datadir, "cfr", f"title-{titleno}", f"part-{partno}"), exist_ok=True)
+                fr_cita_to_cfr_divs = citations_of_part(titleno, partno, datadir)
+                final_rules = final_rules_for_part(titleno, partno, datadir)
 
                 # Map each FR citation to its FR Final Rule document
                 for fr_cita_with_date in fr_cita_to_cfr_divs:
@@ -288,20 +290,17 @@ def cfr_to_fr_docs(titlenos):
                         if citation_in_doc(fr_cita, rule):
                             docno = rule["document_number"]
                             if docno not in final_rule_docs:
-                                final_rule_docs[docno] = rule
+                                final_rule_docs[docno] = (set(), rule)
+                            # Aggregate the CFR divs that correspond to a single Final Rule
+                            final_rule_docs[docno][0].update(fr_cita_to_cfr_divs[fr_cita_with_date])
                             final_rule_identified = True
                             
                     if not final_rule_identified:
-                        # TODO: map FR editions to years so we have some sense of why an FR citation was skipped
+                        # TODO: we should have some sense of why an FR citation was skipped
                         unaccounted_for_fr_citas.add(fr_cita)
             
-    print("Final Rule Docs:", final_rule_docs)
-    print("Final Rule Docs:", len(final_rule_docs))
-    print("Unaccounted for FR Citations:", unaccounted_for_fr_citas)
-    print("Unaccounted for FR Citations:", len(unaccounted_for_fr_citas))
-
-    skipped = build_data_for_final_rules(final_rule_docs)
-    print(skipped)
+    skipped = fetch_final_rules(final_rule_docs)
+    return final_rule_docs, skipped
     
 
 def check_title(titleno):
@@ -354,7 +353,7 @@ if __name__ == "__main__":
         cfr_inputs.append(titleno)
 
     # TODO: status?
-    fr_doc_data = cfr_to_fr_docs(cfr_inputs)
+    fr_doc_data, _ = cfr_to_fr_docs(cfr_inputs)
     fr_doc_analysis = llm_analysis(fr_doc_data)
 
     # TODO: save
