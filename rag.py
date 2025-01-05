@@ -250,9 +250,9 @@ def evaluate_one(rule_dir):
     '''
 
     agencies = " or ".join([f"the {a} ({abbrv})" for a, abbrv in zip(details["agencies"], details["agency-shorthand"])])
-
+    pronoun = "their" if len(details["agencies"]) > 1 else "its"
     prompt = f'''
-    Did {agencies} receive any public comments questioning its legal or statutory authority to issue this Final Rule? 
+    Did {agencies} receive any public comments questioning {pronoun} legal or statutory authority to issue this Final Rule?
     '''
 
     print("Prompt:", prompt)
