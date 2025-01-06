@@ -306,6 +306,11 @@ def extract_part_info(titleno, divty, divid, datadir):
     Fetch the structure of a CFR Title from the eCFR, cache it, and return a list of the component Parts.
     All CFR Titles are divided into Parts, unlike some other subdivisions (Chapter, Subchapter, etc.).
     '''
+    if titleno not in CFR_TITLES:
+        raise ValueError(f"Invalid CFR Title {titleno}")
+    if titleno == "35":
+        raise ValueError(f"Title 35 is fully reserved.")
+    
     structure_path = os.path.join(datadir, "cfr", "structure", f"title-{titleno}.json")    
     try:
         with open(structure_path, "r") as f:
@@ -327,7 +332,7 @@ def extract_part_info(titleno, divty, divid, datadir):
     div_structure = list(filter(lambda item : item["type"] == divty and item["identifier"] == divid, flat_structure))
     
     if len(div_structure) == 0:
-        raise ValueError(f"Unknown input specified: {titleno} CFR {divty} {divid}")
+        raise ValueError(f"Unknown input: {titleno} CFR {divty} {divid}")
     assert len(div_structure) == 1 and f"WEIRD: {titleno} CFR {divty} {divid} maps to multiple subdivisions of the CFR."
     
     flat_div_structure = flatten_structure(div_structure[0])
