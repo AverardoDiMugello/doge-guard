@@ -8,7 +8,9 @@ import re
 import requests
 import toml
 
+# TODO: use CFR date properly
 ECFR_DATE = "2024-12-30"
+CFR_TITLES = [str(num) for num in range(1, 51)]
 
 # [EDITION] FR [PAGE NUMBER], [MONTH-ABBREV], [DATE], [YEAR]{, as ammended at [EDITION] FR [PAGE NUMBER], [MONTH-ABBREV], [DATE], [YEAR]{..}}
 pattern = r"([0-9]+ FR [0-9]+, (Jan.|Feb.|Mar.|Apr.|May|June|July|Aug.|Sept.|Oct.|Nov.|Dec.) [0-9]{1,2}, [0-9]{4})"
@@ -30,31 +32,6 @@ def citation_in_doc(cita_in_cfr, rule):
     same_edition = fr_cita[0] == cita_in_cfr[0]
     in_page_range = fr_start <= int(cita_in_cfr[2]) and int(cita_in_cfr[2]) <= fr_stop
     return same_edition and in_page_range
-
-
-def parts_of_title(num, datadir):
-    '''
-    Fetch the structure of a CFR Title from the eCFR, cache it, and return a list of the component Parts.
-    All CFR Titles are divided into Parts, unlike some other subdivisions (Chapter, Subchapter, etc.).
-    '''
-    structure_path = os.path.join(datadir, "cfr", f"title-{num}", "structure.json")
-    try:
-        with open(structure_path, "r") as f:
-            structure = json.load(f)
-    except FileNotFoundError:
-        structure = requests.get(f"https://www.ecfr.gov/api/versioner/v1/structure/{ECFR_DATE}/title-{num}.json")
-        structure.raise_for_status()
-        structure = structure.json()
-        with open(structure_path, "w") as f:
-            json.dump(structure, f)
-
-    def flatten_structure(item):
-        flat_structure = [item]
-        for child in item.get("children", []):
-            flat_structure.extend(flatten_structure(child))
-        return flat_structure
-    
-    return list(filter(lambda item : item["type"] == "part", flatten_structure(structure)))
 
 
 def citations_of_part(titleno, partno, datadir):
@@ -217,8 +194,9 @@ def fetch_final_rules(final_rule_docs, datadir):
     return skipped
 
 
-def cfr_to_fr_docs(titlenos, datadir):
+def cfr_to_fr_docs(cfr_parts, datadir):
     '''
+    Input: [(titleno, part)]
     Create a database in the local filesystem with this structure:
     cfr-{date}/
         title-{titleno}/
@@ -233,7 +211,7 @@ def cfr_to_fr_docs(titlenos, datadir):
         doc-no-X/
             details.toml
             index # Added by llm_analysis
-            results.{txt, toml, json?} # Added by llm_analysiss
+            results.{txt, toml, json?} # Added by llm_analysis
             rule.html
             rule.pdf
         doc-no-Y/
@@ -244,8 +222,8 @@ def cfr_to_fr_docs(titlenos, datadir):
     be attributed to a Final Rule doc at FederalRegister.gov
     '''
     # FR document numbers to a tuple of the relevant FR doc info from FederalRegister.gov and the set of CFR divisions in which the FR doc was cited
-    final_rule_docs = {}
-    # FR citations from the CFR that can't be mapped back to a Final Rule from FederalRegister.gov
+    fr_docs_in_cfr = {}
+    # FR citations from the CFR that can't be mapped back to a document from FederalRegister.gov
     unaccounted_for_fr_citas = set()
 
     # This is used to add agency abbreviations to the FR doc info. The field is useful to the LLM and can't be selected in the FederalRegister.gov 
@@ -254,57 +232,50 @@ def cfr_to_fr_docs(titlenos, datadir):
     all_agency_info.raise_for_status()
     all_agency_info = all_agency_info.json()
 
-    # TODO: update this when input language is improved
-    for titleno in titlenos:
-        os.makedirs(os.path.join(datadir, "cfr", f"title-{titleno}"), exist_ok=True)
-        parts = parts_of_title(titleno, datadir)
-        for part in parts:
-            if not part["reserved"]:
-                partno = part["identifier"] # Can be non-integer
-                # TODO: REMOVE. TESTING PURPOSES ONLY
-                if partno != "62":
-                    continue
-                os.makedirs(os.path.join(datadir, "cfr", f"title-{titleno}", f"part-{partno}"), exist_ok=True)
-                fr_cita_to_cfr_divs = citations_of_part(titleno, partno, datadir)
-                final_rules = final_rules_for_part(titleno, partno, datadir)
+    for (titleno, part) in cfr_parts:
+        partno = part["identifier"] # Can be non-integer
+        print(f"Analyzing {titleno} CFR Part {partno}")
+        os.makedirs(os.path.join(datadir, "cfr", f"title-{titleno}", f"part-{partno}"), exist_ok=True)
+        fr_cita_to_cfr_divs = citations_of_part(titleno, partno, datadir)
+        final_rules = final_rules_for_part(titleno, partno, datadir)
 
-                # Map each FR citation to its FR Final Rule document number
-                for fr_cita_with_date in fr_cita_to_cfr_divs:
-                    fr_cita = fr_cita_with_date.split(",", 1)[0]
-                    
-                    final_rule_identified = False
-                    for rule in final_rules.get("results", []):
-                        if citation_in_doc(fr_cita, rule):
-                            docno = rule["document_number"]
-                            if docno not in final_rule_docs:
-                                # Add the short-hands for the responsible agencies
-                                agency_names = []
-                                agency_abbrvs = []
-                                for agency in rule["agency_names"]:
-                                    try:
-                                        agency_abbrvs.append(next(agency_info["short_name"] for agency_info in all_agency_info if agency == agency_info["name"]))
-                                        agency_names.append(agency)
-                                    except Exception as e:
-                                        raise ValueError(f"{agency} could not be connected to a an agency short_name: {e}")
-                                rule["agencies"] = agency_names
-                                rule["agency-shorthand"] = agency_abbrvs
-                                
-                                final_rule_docs[docno] = (set(), rule)
-                            final_rule_docs[docno][0].update(fr_cita_to_cfr_divs[fr_cita_with_date])
-                            
-                            final_rule_identified = True
-                            
-                    if not final_rule_identified:
-                        # TODO: we should have some sense of why an FR citation was skipped
-                        unaccounted_for_fr_citas.add(fr_cita)
+        # Map each FR citation to its FR Final Rule document number
+        for fr_cita_with_date in fr_cita_to_cfr_divs:
+            fr_cita = fr_cita_with_date.split(",", 1)[0]
             
-    skipped = fetch_final_rules(final_rule_docs, datadir)
+            fr_doc_identified = False
+            for rule in final_rules.get("results", []):
+                if citation_in_doc(fr_cita, rule):
+                    docno = rule["document_number"]
+                    if docno not in fr_docs_in_cfr:
+                        # Add the short-hands for the issuing agencies
+                        agency_names = []
+                        agency_abbrvs = []
+                        for agency in rule["agency_names"]:
+                            try:
+                                agency_abbrvs.append(next(agency_info["short_name"] for agency_info in all_agency_info if agency == agency_info["name"]))
+                                agency_names.append(agency)
+                            except Exception as e:
+                                raise ValueError(f"{agency} could not be connected to a an agency short_name: {e}")
+                        rule["agencies"] = agency_names
+                        rule["agency-shorthand"] = agency_abbrvs
+                        
+                        fr_docs_in_cfr[docno] = (set(), rule)
+                    fr_docs_in_cfr[docno][0].update(fr_cita_to_cfr_divs[fr_cita_with_date])
+                    
+                    fr_doc_identified = True
+                    
+            if not fr_doc_identified:
+                # TODO: we should have some sense of why an FR citation was skipped
+                unaccounted_for_fr_citas.add(fr_cita)
+            
+    skipped = fetch_final_rules(fr_docs_in_cfr, datadir)
 
     # Filter out the FR docs we identified but couldn't fetch from FederalRegister.gov and convert the results into a Pandas DataFrame
     skipped_docnos = list(map(lambda s : s[1]["document_number"], skipped))
-    filtered_fr_docs = {docno: final_rule_docs[docno] for docno in final_rule_docs if docno not in skipped_docnos}
+    fr_docs_to_analyze = {docno: fr_docs_in_cfr[docno] for docno in fr_docs_in_cfr if docno not in skipped_docnos}
     
-    final_rule_docs = {
+    fr_docs_in_cfr = {
         "fr-docno": [], 
         "cfr-divs-referenced-in": [], 
         "fr-doc-citation": [], 
@@ -316,74 +287,77 @@ def cfr_to_fr_docs(titlenos, datadir):
         "fr-doc-cfr-parts-affected": []
     }
     
-    for docno, (cfr_divs, docinfo) in filtered_fr_docs.items():
-        final_rule_docs["fr-docno"].append(docno),
-        final_rule_docs["cfr-divs-referenced-in"].append(cfr_divs),
-        final_rule_docs["fr-doc-citation"].append(docinfo["citation"]),
-        final_rule_docs["fr-doc-agencies"].append(docinfo["agencies"]),
-        final_rule_docs["fr-doc-agencies-shorthand"].append(docinfo["agency-shorthand"]),
-        final_rule_docs["fr-doc-title"].append(docinfo["title"]),
-        final_rule_docs["fr-doc-abstract"].append(docinfo["abstract"]),
-        final_rule_docs["fr-doc-publication-date"].append(docinfo["publication_date"]),
-        final_rule_docs["fr-doc-cfr-parts-affected"].append(docinfo["cfr_references"]),
+    for docno, (cfr_divs, docinfo) in fr_docs_to_analyze.items():
+        fr_docs_in_cfr["fr-docno"].append(docno),
+        fr_docs_in_cfr["cfr-divs-referenced-in"].append(cfr_divs),
+        fr_docs_in_cfr["fr-doc-citation"].append(docinfo["citation"]),
+        fr_docs_in_cfr["fr-doc-agencies"].append(docinfo["agencies"]),
+        fr_docs_in_cfr["fr-doc-agencies-shorthand"].append(docinfo["agency-shorthand"]),
+        fr_docs_in_cfr["fr-doc-title"].append(docinfo["title"]),
+        fr_docs_in_cfr["fr-doc-abstract"].append(docinfo["abstract"]),
+        fr_docs_in_cfr["fr-doc-publication-date"].append(docinfo["publication_date"]),
+        fr_docs_in_cfr["fr-doc-cfr-parts-affected"].append(docinfo["cfr_references"]),
         
-    return pd.DataFrame(final_rule_docs), (skipped, unaccounted_for_fr_citas)
+    return pd.DataFrame(fr_docs_in_cfr), (skipped, unaccounted_for_fr_citas)
 
 
-def check_title(titleno):
+def extract_part_info(titleno, divty, divid, datadir):
+    '''
+    Fetch the structure of a CFR Title from the eCFR, cache it, and return a list of the component Parts.
+    All CFR Titles are divided into Parts, unlike some other subdivisions (Chapter, Subchapter, etc.).
+    '''
+    structure_path = os.path.join(datadir, "cfr", "structure", f"title-{titleno}.json")    
     try:
-        titleno = int(titleno)
-        assert 1 <= titleno and titleno <= 50
-        assert titleno != 35 and "Title 35 is Reserved"
-    except Exception as e:
-        raise ValueError(f"{titleno} is not a valid CFR Title: {e}")
+        with open(structure_path, "r") as f:
+            structure = json.load(f)
+    except FileNotFoundError:
+        structure = requests.get(f"https://www.ecfr.gov/api/versioner/v1/structure/{ECFR_DATE}/title-{titleno}.json")
+        structure.raise_for_status()
+        structure = structure.json()
+        with open(structure_path, "w") as f:
+            json.dump(structure, f)
+
+    def flatten_structure(item):
+        flat_structure = [item]
+        for child in item.get("children", []):
+            flat_structure.extend(flatten_structure(child))
+        return flat_structure
+    
+    flat_structure = flatten_structure(structure)
+    div_structure = list(filter(lambda item : item["type"] == divty and item["identifier"] == divid, flat_structure))
+    
+    if len(div_structure) == 0:
+        raise ValueError(f"Unknown input specified: {titleno} CFR {divty} {divid}")
+    assert len(div_structure) == 1 and f"WEIRD: {titleno} CFR {divty} {divid} maps to multiple subdivisions of the CFR."
+    
+    flat_div_structure = flatten_structure(div_structure[0])
+    parts_for_div = filter(lambda item : item["type"] == "part" and not item["reserved"], flat_div_structure)
+    parts_with_title = list(map(lambda part : (titleno, part), parts_for_div))
+    assert len(parts_with_title) > 0 and f"{titleno} CFR {divty} {divid} exists but contains no Parts that aren't reserved."
+    
+    return parts_with_title
 
 
 if __name__ == "__main__":
-    '''
-    Final output:
-    Final rule docno, [CFR divs affected], Final rule meta..., LLM analysis
-
-    User + Input:
-        a team of legal and policy experts for a given agency select the Titles and/or Parts of the CFR they have jurisdiction over.
-    Algo:
-        cfr_to_fr_docs:
-            Output: fsdb of Final Rules, fsdb of the CFR Parts, mem dictionary of FR2 docnos, CFR divs affected, and other data, maybe
-            some output files describing the results, e.g. skipped
-            1. Loads one or more CFR titles (eCFR)
-            2. Divides it into Parts and fetches the XML of those Parts (eCFR)
-            3. Aggregates the FR citations for each Part (eCFR)
-            4. Aggregates and fetches all FR Final Rules since 2000 that affected each Part (FR.gov)
-            5. Converts the previous two results into the set of Final Rule documents that compose all Parts in the Title
-            6. Unite those results across all input Titles
-        llm_analysis:
-            Input: mem dictionary of data
-            Output: input + LLM results as a .csv
-            1. Statutory question
-            2. Possibly a follow-up
-    Output:
-
-    '''
     import argparse
     parser = argparse.ArgumentParser("")
     parser.add_argument("datadir", help="The directory to store the results and analyzed data")
-    parser.add_argument("--title", action="append", help="A CFR Title to analyze")
-    # TODO: support more granulary ways of selecting CFR Parts to analyze
-    # e.g. individual Parts, Part ranges, maybe entire chapters or sub-chapters
+    parser.add_argument("--Title", action="append", help="A CFR Title to analyze. This argument can be listed multiple times for multiple Titles.")
+    parser.add_argument("--Part", nargs=2, action="append", metavar=("TITLE", "PART"), help="A CFR Title and Part to analyze (e.g., for 40 CFR Part 62, --Part 40 62). This argument can be listed multiple times for multiple Parts.")
     
     args = parser.parse_args()
 
-    # TODO: expand checks as input language expands
-    cfr_inputs = []
-    for titleno in args.title:
-        check_title(titleno)
-        cfr_inputs.append(titleno)
-
+    os.makedirs(os.path.join(args.datadir, "cfr", "structure"), exist_ok=True)
+    cfr_parts = []
+    for titleno in args.Title:
+        cfr_parts.extend(extract_part_info(titleno, "title", titleno, args.datadir))
+    for titleno, partno in args.Part:
+        cfr_parts.extend(extract_part_info(titleno, "part", partno, args.datadir))
+    
     # TODO: handle status
-    fr_doc_data, _ = cfr_to_fr_docs(cfr_inputs, args.datadir)
+    fr_doc_data, _ = cfr_to_fr_docs(cfr_parts, args.datadir)
     fr_doc_analysis = llm_analysis(fr_doc_data, args.datadir)
 
-    # TODO: save
     fr_doc_data = pd.DataFrame(fr_doc_data)
     with open(os.path.join(args.datadir, "fr-doc-data.csv"), "w") as outf:
         fr_doc_data.to_csv(outf)
