@@ -14,9 +14,9 @@ CFR_TITLES = [str(num) for num in range(1, 51)]
 
 # [EDITION] FR [PAGE NUMBER], [MONTH-ABBREV], [DATE], [YEAR]{, as ammended at [EDITION] FR [PAGE NUMBER], [MONTH-ABBREV], [DATE], [YEAR]{..}}
 # For now, we aren't using the date. Maybe when diff-ing algo
-# pattern = r"([0-9]+ FR [0-9]+, (Jan.|Feb.|Mar.|Apr.|May|June|July|Aug.|Sept.|Oct.|Nov.|Dec.) [0-9]{1,2}, [0-9]{4})"
-pattern = r"[0-9]+ FR [0-9]+"
-citation_regex = re.compile(pattern)
+# fr_citation_pattern = r"([0-9]+ FR [0-9]+, (Jan.|Feb.|Mar.|Apr.|May|June|July|Aug.|Sept.|Oct.|Nov.|Dec.) [0-9]{1,2}, [0-9]{4})"
+citation_regex = re.compile(r"[0-9]+ FR [0-9]+")
+non_alphabet_regex = re.compile(r"\D")
 
 def llm_analysis(fr_doc_data, datadir):
     return fr_doc_data
@@ -24,6 +24,10 @@ def llm_analysis(fr_doc_data, datadir):
 
 def citation_in_doc(cita_in_cfr, rule):
     fr_cita, fr_start, fr_stop = rule["citation"], rule["start_page"], rule["end_page"]
+    if fr_cita is None:
+        # This is rare but can happen, e.g. FR doc 94-27103
+        return False
+    
     cita_in_cfr = cita_in_cfr.split(" ")
     assert len(cita_in_cfr) == 3 and cita_in_cfr[1] == "FR"
     
@@ -59,8 +63,15 @@ def citations_of_part(titleno, partno, datadir):
     fr_cita_to_cfr_divs = {}
 
     for cita_elem in full_xml.iter("CITA"):
-        div = cita_elem.getparent()
-        divname, divty = div.attrib["N"], div.attrib["TYPE"]
+        parent = cita_elem.getparent()
+        if parent.tag.startswith("DIV"):
+            divname, divty = parent.attrib["N"], parent.attrib["TYPE"]
+        elif parent.tag.startswith("EXTRACT"):
+            grandparent = parent.getparent()
+            if grandparent.tag.startswith("DIV"):
+                divname, divty = grandparent.attrib["N"], grandparent.attrib["TYPE"]
+            else:
+                divname, divty = next(f"{titleno} CFR {partno} {child.text}" for child in parent if child.tag == "HD1"), "EXTRACT"
         fr_citations = set(re.findall(citation_regex, cita_elem.text))
         
         for fr_cita in fr_citations:
@@ -80,7 +91,7 @@ def citations_of_part(titleno, partno, datadir):
 
 def fr_docs_for_part(titleno, partno, datadir):
     '''
-    Search FederalRegister.gov for all Final Rule documents since 2000 that were marked as affecting the given CFR Part.
+    Search FederalRegister.gov for all Final Rule documents since 1994 that were marked as affecting the given CFR Part.
     Cache the search results. FR.gov's search API returns a JSON object, returned from this function as a dictionary.
     '''
     print("\t[*] Searching for affecting FR documents... ", end="")
@@ -92,8 +103,10 @@ def fr_docs_for_part(titleno, partno, datadir):
         rule_query = "https://www.federalregister.gov/api/v1/documents.json"
         rule_query += "?per_page=1000&order=newest"
         rule_query += f"&conditions[cfr][title]={titleno}"
-        rule_query += f"&conditions[cfr][part]={partno}"
-        rule_query += "&conditions[publication_date][gte]=2000-01-01"
+        # Some Parts have letters in them (e.g. 15 CFR 4a) and the FederalRegister.gov API lists documents affecting these parts under just
+        # the numerical Part, i.e. 15 CFR 4 for the aforementioned example.
+        rule_query += f"&conditions[cfr][part]={re.sub(non_alphabet_regex, '', partno)}"
+        rule_query += "&conditions[publication_date][gte]=1994-01-01"
         rule_query += "&conditions[type][]=RULE"
         rule_query += "&fields[]=abstract"
         rule_query += "&fields[]=agencies"
@@ -113,24 +126,26 @@ def fr_docs_for_part(titleno, partno, datadir):
         rule_search.raise_for_status()
         rule_search = rule_search.json()
         
-        total_pages = rule_search.get("total_pages", 0)
-        if total_pages > 1:
-            pageno = 2
-            while pageno <= total_pages:
-                rule_query += f"&page={pageno}"
-                next_page = requests.get(rule_query)
-                next_page.raise_for_status()
-                next_page = next_page.json()
-                rule_search["results"].extend(next_page["results"])
-                rule_search["count"] += next_page["count"]
-                pageno += 1
+        next_page_url = rule_search.get("next_page_url")
+        while next_page_url is not None:
+            next_page = requests.get(next_page_url)
+            next_page.raise_for_status()
+            next_page = next_page.json()
+            print(len(next_page["results"]))
+            rule_search["results"].extend(next_page["results"])
+            next_page_url = next_page.get("next_page_url")    
             
         with open(rule_search_path, "w") as f:
             json.dump(rule_search, f)
     
     result_count = rule_search["count"]
     results = rule_search.get("results", [])
-    assert result_count == len(results)
+    try:
+        # Results are returned 1000 results per page for maximum 10 pages. TODO: fetch the remaining for those above 10,000
+        assert result_count == len(results) or result_count > 10000
+    except AssertionError as e:
+        print(f"result_count = {result_count}, len(results) = {len(results)} ")
+        raise e
     print(f"{result_count} documents.")
     
     return results
@@ -150,7 +165,7 @@ def fetch_fr_docs(final_rule_docs, datadir):
     skipped = []
     num_rules = len(final_rule_docs)
     for i, docno in enumerate(final_rule_docs):
-        print(f"\t[*] Fetching FR documents... {i+1}/{num_rules}: {docno}", end="\r", flush=True)
+        print(f"[*] Fetching FR documents... {i+1}/{num_rules}: {docno}", end="\r", flush=True)
         fr_doc = final_rule_docs[docno][1]
 
         # Skip existing Final Rule docs
@@ -187,8 +202,7 @@ def fetch_fr_docs(final_rule_docs, datadir):
             details["start_page"] = fr_doc["start_page"]
         except Exception as e:
             skipped.append((i, fr_doc, e))
-            # continue
-            raise ValueError(f"{e} {i}, {fr_doc}")
+            continue
 
         os.makedirs(document_dir, exist_ok=True)
 
@@ -204,7 +218,7 @@ def fetch_fr_docs(final_rule_docs, datadir):
         with open(rule_html, "wb") as rule_html:
             rule_html.write(html_res.content)
     
-    print(f"\t[*] Fetching FR documents... {num_rules - len(skipped)}/{num_rules}, {len(skipped)} skipped.", flush=True)
+    print(f"[*] Fetching FR documents... {num_rules - len(skipped)}/{num_rules}, {len(skipped)} skipped.", flush=True)
     return skipped
 
 
@@ -394,17 +408,23 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser("")
     parser.add_argument("datadir", help="The directory to store the results and analyzed data")
-    parser.add_argument("--Title", action="append", help="A CFR Title to analyze. This argument can be listed multiple times for multiple Titles.")
-    parser.add_argument("--Part", nargs=2, action="append", metavar=("TITLE", "PART"), help="A CFR Title and Part to analyze (e.g., for 40 CFR Part 62, --Part 40 62). This argument can be listed multiple times for multiple Parts.")
+    parser.add_argument("--ALL", action="store_true", default=False, help="Analyze all Parts of all CFR Titles. This overrides all other options.")
+    parser.add_argument("--Title", action="append", default=[], help="A CFR Title to analyze. This argument can be listed multiple times for multiple Titles.")
+    parser.add_argument("--Part", nargs=2, metavar=("TITLE", "PART"), action="append", default=[], help="A CFR Title and Part to analyze (e.g., for 40 CFR Part 62, --Part 40 62). This argument can be listed multiple times for multiple Parts.")
     
     args = parser.parse_args()
 
     os.makedirs(os.path.join(args.datadir, f"cfr-{ECFR_DATE}", "structure"), exist_ok=True)
     cfr_parts = []
-    for titleno in args.Title:
-        cfr_parts.extend(extract_part_info(titleno, "title", titleno, args.datadir))
-    for titleno, partno in args.Part:
-        cfr_parts.extend(extract_part_info(titleno, "part", partno, args.datadir))
+    if args.ALL:
+        for titleno in CFR_TITLES:
+            if titleno != "35":
+                cfr_parts.extend(extract_part_info(titleno, "title", titleno, args.datadir))
+    else:
+        for titleno in args.Title:
+            cfr_parts.extend(extract_part_info(titleno, "title", titleno, args.datadir))
+        for titleno, partno in args.Part:
+            cfr_parts.extend(extract_part_info(titleno, "part", partno, args.datadir))
 
     fr_doc_data, cfr_cov = cfr_to_fr_docs(cfr_parts, args.datadir)
     fr_doc_analysis = llm_analysis(fr_doc_data, args.datadir)
