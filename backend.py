@@ -131,7 +131,7 @@ class VectorStoreIndex:
         for chunk in chunks:
             chunk = str(chunk)
             self.input_doc_tok_len += len(chunk)
-            self.input_doc_word_len += len(chunk.split(" "))
+            self.input_doc_word_len += len(list(filter(lambda word : not (word.isspace() or word == ""), chunk.split(" "))))
             self.docs.append(
                 {
                     "title": self.raw_doc_path,
@@ -376,21 +376,31 @@ def citations_of_part(titleno, partno, datadir):
     fr_cita_to_cfr_divs = {}
 
     for cita_elem in full_xml.iter("CITA"):
+        div_to_sum = None
         parent = cita_elem.getparent()
         if parent.tag.startswith("DIV"):
             divname, divty = parent.attrib["N"], parent.attrib["TYPE"]
+            div_to_sum = parent
         elif parent.tag.startswith("EXTRACT"):
             grandparent = parent.getparent()
             if grandparent.tag.startswith("DIV"):
                 divname, divty = grandparent.attrib["N"], grandparent.attrib["TYPE"]
+                div_to_sum = grandparent
             else:
                 divname, divty = next(f"{titleno} CFR {partno} {child.text}" for child in parent if child.tag == "HD1"), "EXTRACT"
+                div_to_sum = parent
+        
+        div_word_sz = 0
+        for text in div_to_sum.itertext():
+            splittextt = filter(lambda word : not (word.isspace() or word == ""), text.split(" "))
+            div_word_sz += len(list(splittextt))
+
         fr_citations = set(re.findall(citation_regex, cita_elem.text))
         
         for fr_cita in fr_citations:
             if fr_cita not in fr_cita_to_cfr_divs:
                 fr_cita_to_cfr_divs[fr_cita] = set()
-            fr_cita_to_cfr_divs[fr_cita].add((divname, divty))
+            fr_cita_to_cfr_divs[fr_cita].add((divname, divty, div_word_sz))
         
     # This should just be accounted for in the sub-part granule citations
     # TODO: when we get CFR data that's better for time differentials, we can update this and test this hypothesis.
