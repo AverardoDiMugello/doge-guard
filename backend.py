@@ -1,4 +1,7 @@
+import cohere
 import datetime
+from dotenv import load_dotenv
+import hnswlib
 import json
 import lxml.etree as ET
 import os
@@ -6,21 +9,331 @@ import pandas as pd
 from pathlib import Path
 import re
 import requests
+import sys
+import time
 import toml
+from unstructured.partition.html import partition_html
+from unstructured.chunking.title import chunk_by_title
+import uuid
 
-# TODO: use CFR date properly
+########################################
+# Global constants for parsing the CFR #
+########################################
+
+# Since a freeze in issued regulations is likely shortly after the inauguration, a good way to have synchronized data and results
+# across multiple users is to have a fixed end date for data, likely whenever that rule freeze is put in place.
 ECFR_DATE = "2024-12-30"
 CFR_TITLES = [str(num) for num in range(1, 51)]
-
-# [EDITION] FR [PAGE NUMBER], [MONTH-ABBREV], [DATE], [YEAR]{, as ammended at [EDITION] FR [PAGE NUMBER], [MONTH-ABBREV], [DATE], [YEAR]{..}}
 # For now, we aren't using the date. Maybe when diff-ing algo
 # fr_citation_pattern = r"([0-9]+ FR [0-9]+, (Jan.|Feb.|Mar.|Apr.|May|June|July|Aug.|Sept.|Oct.|Nov.|Dec.) [0-9]{1,2}, [0-9]{4})"
 citation_regex = re.compile(r"[0-9]+ FR [0-9]+")
 non_alphabet_regex = re.compile(r"\D")
 
-def llm_analysis(fr_doc_data, datadir):
-    return fr_doc_data
+#####################################
+# Global constants for using Cohere #
+#####################################
 
+load_dotenv()
+api_key = os.getenv("COHERE_API_KEY")
+co = cohere.Client(api_key)
+
+USING_COHERE_TRIAL_KEY = False
+
+# THESE ARE MUTATED!!!
+TOKENS = 0
+CALLS = 0
+RATE_LIMIT_PAUSES = 0
+
+##############################################
+# Functions and classes for LLM RAG analysis #
+##############################################
+
+def rate_limit_check(additional_toks):
+    '''
+    Enforces pauses for Cohere's rate limits. Not thread-safe. Call before every Cohere request. E.g.,
+    
+    texts = [item["text"] for item in batch]   
+    rate_limit_check(sum(map(lambda x : len(x), texts)))
+    docs_embs_batch = co.embed(
+        texts=texts, model="embed-english-v3.0", input_type="search_document"
+    ).embeddings        
+    '''
+    global TOKENS
+    global CALLS
+    global RATE_LIMIT_PAUSES
+
+    if USING_COHERE_TRIAL_KEY:
+        # Trial key rate limits
+        API_CALL_RATE_LIMIT = 10 # calls/min
+        TOKEN_RATE_LIMIT = 100000 # tokens/min
+    else:
+        # Production key rate limits
+        API_CALL_RATE_LIMIT = 100000 # calls/min guess? This is supposedly 2,000 calls/min for embed, but experimentally, this limit worked...
+        TOKEN_RATE_LIMIT = 2000000 # tokens/min
+
+    print("--- Rate Limit Pause internals ---")
+    print("TOKENS:", TOKENS)
+    print("CALLS:", CALLS)
+    print("RATE_LIMIT_PAUSES:", RATE_LIMIT_PAUSES)
+    print("-----------------------------------")
+
+    CALLS += 1
+    TOKENS += additional_toks
+    if TOKENS / TOKEN_RATE_LIMIT - RATE_LIMIT_PAUSES >= 1 or CALLS / API_CALL_RATE_LIMIT >= 1:
+        print("\tPause for rate-limit...")
+        time.sleep(60)
+        CALLS = 0
+        RATE_LIMIT_PAUSES += 1
+
+
+class VectorStoreIndex:
+    '''
+    Interface for creating and calling an Hnswlib vectorstore for a single document
+    '''
+    def __init__(self, raw_doc_path, index_path, outf=sys.stdout):
+        self.raw_doc_path = raw_doc_path
+        self.docs = []
+        self.docs_embs = []
+        self.retrieve_top_k = 15
+        self.rerank_top_k = 5
+        self.idx = hnswlib.Index(space="ip", dim=1024)
+        self.input_doc_tok_len = 0
+        self.input_doc_word_len = 0
+        self.outf = outf
+        
+        self.load_and_chunk()
+        if os.path.exists(index_path):
+            self.idx.load_index(index_path)
+        else:
+            self.embed()
+            self.index(index_path)
+        print(f"Indexing complete with {self.idx.get_current_count()} document chunks.", file=self.outf)
+
+
+    def load_and_chunk(self):
+        print("Loading documents...", file=self.outf)
+
+        with open(self.raw_doc_path, "r", encoding="windows-1252") as f:
+            html_content = f.read()
+        
+        t0 = time.time()
+        print("\tPartition HTML", file=self.outf)
+        elements = partition_html(text=html_content)
+        print(f"\t\t{time.time() - t0} s", file=self.outf)
+        
+        t0 = time.time()
+        print("\tChunk by title", file=self.outf)
+        chunks = chunk_by_title(elements)
+        print(f"\t\t{time.time() - t0} s", file=self.outf)
+        
+        print(f"\tChunking {self.raw_doc_path}", end="", file=self.outf)
+        t0 = time.time()
+        for chunk in chunks:
+            chunk = str(chunk)
+            self.input_doc_tok_len += len(chunk)
+            self.input_doc_word_len += len(chunk.split(" "))
+            self.docs.append(
+                {
+                    "title": self.raw_doc_path,
+                    "text": chunk,
+                }
+            )
+        print(f"\t\t{time.time() - t0} s", file=self.outf)
+
+    
+    def embed(self):
+        print("Embedding document chunks...", file=self.outf)
+
+        batch_size = 90
+        self.docs_len = len(self.docs)
+        for i in range(0, self.docs_len, batch_size):
+            batch = self.docs[i : min(i + batch_size, self.docs_len)]
+            texts = [item["text"] for item in batch]
+            
+            rate_limit_check(sum(map(lambda x : len(x), texts)))
+            print(f"\tSending...", file=self.outf)
+            docs_embs_batch = co.embed(
+                texts=texts, model="embed-english-v3.0", input_type="search_document"
+            ).embeddings
+            self.docs_embs.extend(docs_embs_batch)
+            
+   
+    def index(self, index_path):
+        print("Indexing document chunks...", file=self.outf)
+
+        self.idx.init_index(max_elements=self.docs_len, ef_construction=512, M=64)
+        self.idx.add_items(self.docs_embs, list(range(len(self.docs_embs))))
+
+        print("Saving idx to disc...", file=self.outf)
+        self.idx.save_index(index_path)
+
+    
+    def retrieve(self, query: str):
+        # Retrieve
+        rate_limit_check(len(query))
+        query_emb = co.embed(
+            texts=[query], model="embed-english-v3.0", input_type="search_query"
+        ).embeddings
+
+        doc_ids = self.idx.knn_query(query_emb, k=self.retrieve_top_k)[0][0]
+
+        # Rerank
+        rank_fields = ["title", "text"]
+
+        docs_to_rerank = [self.docs[doc_id] for doc_id in doc_ids]
+        print("Docs to rerank:", docs_to_rerank, file=self.outf)
+
+        rate_limit_check(len(query))
+        rerank_results = co.rerank(
+            query=query,
+            documents=docs_to_rerank,
+            top_n=self.rerank_top_k,
+            model="rerank-english-v3.0",
+            rank_fields=rank_fields
+        )
+
+        doc_ids_reranked = [doc_ids[result.index] for result in rerank_results.results]
+
+        docs_retrieved = []
+        for doc_id in doc_ids_reranked:
+            docs_retrieved.append(
+                {
+                    "title": self.docs[doc_id]["title"],
+                    "text": self.docs[doc_id]["text"],
+                }
+            )
+
+        print("Docs reranked:", docs_retrieved, file=self.outf)
+
+        return docs_retrieved
+
+
+class Chatbot:
+    def __init__(self, vectorstore: VectorStoreIndex, outf=sys.stdout):
+        self.vectorstore = vectorstore
+        self.conversation_id = str(uuid.uuid4())
+        self.outf = outf
+ 
+    
+    def run(self, preamble, prompt):
+        result = {}
+        print(f"\n{'-'*100}\n", file=self.outf)
+        
+        try:
+            toks_in_query = len(preamble) + len(prompt)
+
+            # Generate search queries (if any)
+            rate_limit_check(toks_in_query)
+            response = co.chat(
+                preamble=preamble,
+                message=prompt,
+                model="command-r",
+                search_queries_only=True
+            )
+
+            # If there are search queries, retrieve document chunks and respond
+            if response.search_queries:
+                print("Retrieving information...", end="", file=self.outf)
+
+                # Retrieve document chunks for each query
+                documents = []
+                for query in response.search_queries:
+                    documents.extend(self.vectorstore.retrieve(query.text))
+                result["chunks_used"] = documents
+                result["fr_doc_tok_len"] = self.vectorstore.input_doc_tok_len
+                result["fr_doc_word_len"] = self.vectorstore.input_doc_word_len
+
+                # Use document chunks to respond
+                rate_limit_check(toks_in_query)
+                response = co.chat(
+                    preamble=preamble,
+                    message=prompt,
+                    model="command-r-plus",
+                    documents=documents,
+                    conversation_id=self.conversation_id,
+                )
+            else:
+                raise Exception("No search queries identified in prompt")
+
+            # Print the chatbot response, citations, and document
+            print("\nChatbot:", response.text, file=self.outf)
+            result["answer"] = response.text
+            result["citations"] = response.citations
+
+            # Display citations and source documents
+            if response.citations:
+                print("\n\nCITATIONS:", file=self.outf)
+                for citation in response.citations:
+                    print(citation, file=self.outf)
+
+                print("\nDOCUMENTS:", file=self.outf)
+                for document in response.documents:
+                    print(document, file=self.outf)
+            result["err_msg"] = ""
+        except Exception as e:
+            result = {
+                "answer": "ERROR",
+                "err_msg": f"{e}",
+                "citations": [],
+                "chunks_used": [],
+                "fr_doc_tok_len": self.vectorstore.input_doc_tok_len,
+                "fr_doc_word_len": self.vectorstore.input_doc_word_len,
+            }
+
+        return result
+
+
+def llm_analysis(fr_doc_dataset, datadir):
+    results = {
+        "llm-answer": [], 
+        "llm-citations": [], 
+        "llm-chunks-used": [],
+        "llm-preamble": [],
+        "llm-prompt": [],
+        "llm-error": [],
+        "fr-doc-tok-len": [],
+        "fr-doc-word-len": []
+    }
+
+    preamble = '''
+
+    ## Task & Context
+    You have been given a Final Rule document which is a document published by a U.S. federal government agency that establishes a new regulation. In a Final Rule document, the agency issuing the Rule responds to any significant, relevant issues raised in public comments about the Rule during the rule-making process. For each public comment in the Final Rule, the agency will first describe the comment from the public and then offer the agency's response. You are being asked to look over all of the comments described in this Final Rule and determine if any of the public commenters raised concerns that the agency is not acting with authority from Congress by issuing this rule. You will only answer yes or no.
+    '''
+    print(fr_doc_dataset.head())
+    for _, fr_doc_data in fr_doc_dataset.iterrows():
+        print(fr_doc_data)
+        rule_dir = os.path.join(datadir, "final_rules", fr_doc_data["fr-docno"])
+        rule_html = os.path.join(rule_dir, "rule.html")
+        index_path = os.path.join(rule_dir, "index")
+        # TODO: change results.txt to a .json
+        results_txt = open(os.path.join(rule_dir, "results.txt"), "w")
+
+        agencies = " or ".join([f"the {a} ({abbrv})" for a, abbrv in zip(fr_doc_data["fr-doc-agencies"], fr_doc_data["fr-doc-agencies-shorthand"])])
+        pronoun = "their" if len(fr_doc_data["fr-doc-agencies"]) > 1 else "its"
+        
+        prompt = f'''
+        Did {agencies} receive any public comments questioning {pronoun} legal or statutory authority to issue this Final Rule?
+        '''
+        vectorstore = VectorStoreIndex(rule_html, index_path, outf=results_txt)
+        chatbot = Chatbot(vectorstore, outf=results_txt)
+        llm_results = chatbot.run(preamble, prompt)
+
+        results["llm-answer"].append(llm_results["answer"])
+        results["llm-citations"].append(llm_results["citations"])
+        results["llm-chunks-used"].append(llm_results["chunks_used"])
+        results["llm-preamble"].append(preamble)
+        results["llm-prompt"].append(prompt)
+        results["llm-error"].append(llm_results["err_msg"])
+        results["fr-doc-tok-len"].append(llm_results["fr_doc_tok_len"])
+        results["fr-doc-word-len"].append(llm_results["fr_doc_word_len"])
+        
+    return pd.concat([fr_doc_dataset, pd.DataFrame(results)], axis=1)
+    
+
+#################################
+# Functions for parsing the CFR #
+#################################
 
 def citation_in_doc(cita_in_cfr, rule):
     fr_cita, fr_start, fr_stop = rule["citation"], rule["start_page"], rule["end_page"]
@@ -432,6 +745,6 @@ if __name__ == "__main__":
     os.makedirs(os.path.join(args.datadir, "results"), exist_ok=True)
     with open(os.path.join(args.datadir, "results", "fr_doc_analysis.csv"), "w") as outf:
         fr_doc_analysis.to_csv(outf)
-    with open(os.path.join(args.datadir, "results", "cfr_cov.csv"), "w") as outf:
+    with open(os.path.join(args.datadir, "results", "cfr_coverage.csv"), "w") as outf:
         cfr_cov.to_csv(outf)
     
