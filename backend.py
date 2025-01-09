@@ -738,23 +738,28 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     os.makedirs(os.path.join(args.datadir, f"cfr-{ECFR_DATE}", "structure"), exist_ok=True)
+    outdir = f"cfr-{ECFR_DATE}"
     cfr_parts = []
     if args.ALL:
+        outdir += "-ALL"
         for titleno in CFR_TITLES:
             if titleno != "35":
                 cfr_parts.extend(extract_part_info(titleno, "title", titleno, args.datadir))
     else:
         for titleno in args.Title:
+            outdir += f"-Title-{titleno}"
             cfr_parts.extend(extract_part_info(titleno, "title", titleno, args.datadir))
         for titleno, partno in args.Part:
+            outdir += f"-Title-{titleno}-Part-{partno}"
             cfr_parts.extend(extract_part_info(titleno, "part", partno, args.datadir))
 
     fr_doc_data, cfr_cov = cfr_to_fr_docs(cfr_parts, args.datadir)
     fr_doc_analysis = llm_analysis(fr_doc_data, args.datadir)
     
-    os.makedirs(os.path.join(args.datadir, "results"), exist_ok=True)
-    with open(os.path.join(args.datadir, "results", "fr_doc_analysis.csv"), "w") as outf:
+    outdir = os.path.join(args.datadir, "results", outdir)
+    os.makedirs(outdir, exist_ok=True)
+    with open(os.path.join(outdir, "fr_doc_analysis.csv"), "w") as outf:
         fr_doc_analysis.to_csv(outf)
-    with open(os.path.join(args.datadir, "results", "cfr_coverage.csv"), "w") as outf:
+    with open(os.path.join(outdir, "cfr_coverage.csv"), "w") as outf:
         cfr_cov.to_csv(outf)
     
