@@ -18,7 +18,7 @@ The v0.1 proof-of-concept of this tool did not decompose the CFR into Federal Re
 
 Doge Guard is currently close to a v1.0 release. The only item left is to update the analysis script from the v0.1 proof-of-concept schema to the current schema. Breaking changes to the result data schema will be reflected in major version number increments to Doge Guard. Other changes, including performance enhancements, post-processing improvements, an analysis front-end, etc., that do not break the result schema will be reflected in minor version increments.
 
-v1.0 pre-release results for 40 CFR Parts 50 and 180 are available [here](https://github.com/AverardoDiMugello/doge-guard/releases). Since the analysis script for the new schema are still outstanding, you will have to use whatever your favorite CSV/Excel analysis method is yourself to make use of them. To generate results for yourself, follow the guide below, but I warn you: meaningful jobs take a long time (for now).
+v1.0 pre-release results for 40 CFR Parts 50 and 180 are available [here](https://github.com/AverardoDiMugello/doge-guard/releases). Since the analysis script for the new schema are still outstanding, you will have to use whatever your favorite CSV/Excel analysis method is yourself to make use of the pre-release results. To generate results for yourself, follow the guide below, but I warn you: meaningful jobs take a long time (for now).
 
 ## User Guide
 
