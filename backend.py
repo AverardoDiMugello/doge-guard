@@ -752,6 +752,10 @@ if __name__ == "__main__":
         for titleno, partno in args.Part:
             outdir += f"-Title-{titleno}-Part-{partno}"
             cfr_parts.extend(extract_part_info(titleno, "part", partno, args.datadir))
+    
+    if len(cfr_parts) == 0:
+        print("ERROR: must specify at least one option of Title or Part!")
+        sys.exit(1)
 
     fr_doc_data, cfr_cov = cfr_to_fr_docs(cfr_parts, args.datadir)
     fr_doc_analysis = llm_analysis(fr_doc_data, args.datadir)
