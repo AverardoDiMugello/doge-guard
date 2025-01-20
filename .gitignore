@@ -2,3 +2,7 @@ env
 .env
 documents
 *.csv
+target
+notes.txt
+out.txt
+Cargo.lock
