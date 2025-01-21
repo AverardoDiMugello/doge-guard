@@ -14,7 +14,9 @@ The name "Doge Guard" was a suggestion from Grok when given a description of thi
 
 Some results have been published as Releases here on GitHub. Click [here](https://github.com/AverardoDiMugello/doge-guard/releases) or in the Releases link in the options to the right of this document to download them.
 
-The v0.1 proof-of-concept of this tool did not decompose the CFR into Federal Register documents; it only analyzed documents from a given time slice of the Federal Register. The results of that proof-of-concept are available [here](https://github.com/AverardoDiMugello/doge-guard/releases/tag/v0.1-pre-release), and the infamous X thread discussing those results is available [here.](https://x.com/DiMugello/status/1868022889368400007) These results cover every Final Rule entered into the Federal Register since the _West Virginia v. EPA_ decision: June 30th, 2022 through December 31st, 2024.
+### Previous (Proof-of-concept) Version
+
+The v0.1 proof-of-concept of this tool did not decompose the CFR into Federal Register documents; it only analyzed documents from a given time slice of the Federal Register. The results of that proof-of-concept are available [here](https://github.com/AverardoDiMugello/doge-guard/releases/tag/v0.1-pre-release), and the X thread discussing those results is available [here.](https://x.com/DiMugello/status/1868022889368400007) These results cover every Final Rule entered into the Federal Register since the _West Virginia v. EPA_ decision: June 30th, 2022 through December 31st, 2024.
 
 Doge Guard is currently close to a v1.0 release. The only item left is to update the analysis script from the v0.1 proof-of-concept schema to the current schema. Breaking changes to the result data schema will be reflected in major version number increments to Doge Guard. Other changes, including performance enhancements, post-processing improvements, an analysis front-end, etc., that do not break the result schema will be reflected in minor version increments.
 
